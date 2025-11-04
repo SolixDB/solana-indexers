@@ -17,6 +17,7 @@ export class NodeConnectionMonitor {
   private lastFailureTime: number | null = null;
   private failureCount = 0;
   private state: "CLOSED" | "OPEN" | "HALF_OPEN" = "CLOSED";
+
   readonly url: string;
   isAlive = false;
 
@@ -26,6 +27,9 @@ export class NodeConnectionMonitor {
   private readonly maxDelay: number;
   private readonly pingIntervalMs: number;
   private readonly maxRetries: number;
+
+  public onReconnect?: (() => Promise<void>) | undefined;
+  public onMessage?: ((data: Buffer) => void) | undefined;
 
   constructor(url: string, options: NodeConnectionMonitorOptions = {}) {
     this.url = url;
@@ -66,19 +70,27 @@ export class NodeConnectionMonitor {
   private setupEventHandlers(onOpen?: () => void) {
     if (!this.ws) return;
 
-    this.ws.on("open", () => {
+    this.ws.on("open", async () => {
       console.log(`[SUCCESS] Connected to ${this.url}`);
       this.state = "CLOSED";
       this.failureCount = 0;
       this.retryCount = 0;
       this.isReconnecting = false;
       this.isAlive = true;
+
       this.startHeartbeat();
-      if (onOpen) onOpen();
+
+      // Call reconnect callback if this is a reconnection
+      if (onOpen) {
+        onOpen();
+      } else if (this.onReconnect) {
+        await this.onReconnect();
+      }
     });
 
     this.ws.on("close", (code: number) => {
       console.warn(`[WARN] Connection closed (code: ${code})`);
+      this.stopHeartbeat();
       this.recordFailure();
       this.scheduleReconnect();
     });
@@ -97,6 +109,7 @@ export class NodeConnectionMonitor {
     this.failureCount++;
     this.lastFailureTime = Date.now();
     console.log(`[INFO] Failure recorded (${this.failureCount}/${this.failureThreshold})`);
+
     if (this.failureCount >= this.failureThreshold) {
       console.error("[ERROR] Circuit breaker OPENED due to repeated failures.");
       this.state = "OPEN";
@@ -105,14 +118,18 @@ export class NodeConnectionMonitor {
 
   private scheduleReconnect() {
     if (this.isReconnecting || this.retryCount >= this.maxRetries) return;
+
     this.isReconnecting = true;
     this.retryCount++;
+
     const delay = Math.min(this.baseDelay * Math.pow(2, this.retryCount - 1), this.maxDelay);
     const jitter = Math.random() * 1000;
     const totalDelay = delay + jitter;
+
     console.log(
       `[INFO] Reconnecting in ${Math.round(totalDelay)}ms (attempt ${this.retryCount}/${this.maxRetries})`
     );
+
     setTimeout(() => {
       this.isReconnecting = false;
       this.connect();
@@ -121,15 +138,18 @@ export class NodeConnectionMonitor {
 
   private startHeartbeat() {
     this.stopHeartbeat();
+
     this.pingInterval = setInterval(() => {
       if (!this.ws) return;
+
       if (!this.isAlive) {
-        console.warn("[WARN] Connection lost, terminating and scheduling reconnect...");
+        console.warn("[WARN] Connection lost (no pong), terminating and reconnecting...");
         this.ws.terminate();
         this.recordFailure();
         this.scheduleReconnect();
         return;
       }
+
       this.isAlive = false;
       this.ws.ping();
     }, this.pingIntervalMs);
