@@ -29,6 +29,7 @@ export class WebSocketPool {
 
   // Unified message handler that calls all registered handlers
   private handleMessage = (data: Buffer): void => {
+    console.log("[DEBUG] handleMessage called, data length:", data.length);
     for (const handler of this.messageHandlers) {
       handler(data);
     }
@@ -39,10 +40,9 @@ export class WebSocketPool {
     if (this.connections.length < this.maxConnections) {
       const monitor = new NodeConnectionMonitor(this.endpoint);
       
-      // Set up message handler (persists across reconnections)
+      // IMPORTANT: Set handlers BEFORE connecting
       monitor.onMessage = this.handleMessage;
       
-      // Set up reconnection callback to resubscribe
       monitor.onReconnect = async () => {
         console.log("[INFO] Connection reconnected, resubscribing...");
         await this.resubscribeAll(monitor);
@@ -50,6 +50,9 @@ export class WebSocketPool {
 
       await monitor.connect();
       this.connections.push(monitor);
+      
+      console.log("[DEBUG] Message handler attached:", !!monitor.onMessage);
+      
       return monitor;
     }
 

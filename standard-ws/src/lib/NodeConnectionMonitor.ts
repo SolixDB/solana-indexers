@@ -17,10 +17,10 @@ export class NodeConnectionMonitor {
   private lastFailureTime: number | null = null;
   private failureCount = 0;
   private state: "CLOSED" | "OPEN" | "HALF_OPEN" = "CLOSED";
-
+  
   readonly url: string;
   isAlive = false;
-
+  
   private readonly failureThreshold: number;
   private readonly recoveryTimeout: number;
   private readonly baseDelay: number;
@@ -28,8 +28,9 @@ export class NodeConnectionMonitor {
   private readonly pingIntervalMs: number;
   private readonly maxRetries: number;
 
-  public onReconnect?: (() => Promise<void>) | undefined;
-  public onMessage?: ((data: Buffer) => void) | undefined;
+  // Callbacks for reconnection and message handling
+  public onReconnect?: () => Promise<void>;
+  public onMessage?: (data: Buffer) => void;
 
   constructor(url: string, options: NodeConnectionMonitorOptions = {}) {
     this.url = url;
@@ -70,17 +71,24 @@ export class NodeConnectionMonitor {
   private setupEventHandlers(onOpen?: () => void) {
     if (!this.ws) return;
 
+    // Attach message handler if registered
+    if (this.onMessage) {
+      this.ws.on("message", this.onMessage);
+    }
+
     this.ws.on("open", async () => {
-      console.log(`[SUCCESS] Connected to ${this.url}`);
+      const isReconnection = !onOpen; // No onOpen callback = reconnection
+      console.log(`[SUCCESS] ${isReconnection ? 'Reconnected' : 'Connected'} to ${this.url}`);
+      
       this.state = "CLOSED";
       this.failureCount = 0;
       this.retryCount = 0;
       this.isReconnecting = false;
       this.isAlive = true;
-
+      
       this.startHeartbeat();
-
-      // Call reconnect callback if this is a reconnection
+      
+      // Call appropriate callback
       if (onOpen) {
         onOpen();
       } else if (this.onReconnect) {
@@ -138,7 +146,7 @@ export class NodeConnectionMonitor {
 
   private startHeartbeat() {
     this.stopHeartbeat();
-
+    
     this.pingInterval = setInterval(() => {
       if (!this.ws) return;
 
